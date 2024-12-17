@@ -1,0 +1,233 @@
+---
+title: "Obesity predictor"
+runtime: shiny
+output: html_document
+---
+
+```{r, echo=FALSE, error=FALSE, message=FALSE, results='hide'}
+library(tidyverse)
+library(readr)
+library(tidyr)
+library(caret)
+library(class)
+library(e1071)
+library(C50)
+library(gmodels)
+library(tidybayes)
+library(kernlab)
+library(glue)
+```
+
+
+### Background and data table
+
+This data analysis trial has been performed using data for the estimation of obesity levels in individuals from the countries of Mexico, Peru, and Colombia, based on their eating habits and physical condition. This dataset called "*Estimation of Obesity Levels Based On Eating Habits and Physical Condition*" can be found in the **UC Irvine Machine Learning Repository**, and it was donated on August 26, 2019.
+The data contains 17 attributes and 2111 records; however, after data preprocessing, wrangling, and splitting procedures, the final **training** and **test** datasets were constituted by **1689 observations**, and **422 observations** respectively. 
+Importantly, **77% of the data was generated synthetically** using the *Weka* tool and the *SMOTE* filter, so only 23% of the data was collected directly from users through a web platform.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+obesity <- read_csv(paste0(getwd(), "/ObesityDataSet_raw_and_data_sinthetic.csv"))
+
+obesity_new <- obesity %>%
+  mutate(Gender = ifelse(Gender == "Female", 1, 0),
+         family_history_with_overweight = ifelse(family_history_with_overweight == "yes", 1, 0),
+         FAVC = ifelse(FAVC == "yes", 1, 0),
+         CAEC_sometimes = ifelse(CAEC == "Sometimes", 1, 0),
+         CAEC_freq = ifelse(CAEC == "Frequently", 1, 0),
+         CAEC_always = ifelse(CAEC == "Always", 1, 0),
+         CAEC_no = ifelse(CAEC == "no", 1, 0),
+         SMOKE = ifelse(SMOKE == "no", 0, 1),
+         SCC = ifelse(SCC == "no", 0, 1),
+         CALC_sometimes = ifelse(CALC == "Sometimes", 1, 0),
+         CALC_freq = ifelse(CALC == "Frequently", 1, 0),
+         CALC_always = ifelse(CALC == "Always", 1, 0),
+         CALC_no = ifelse(CALC == "no", 1, 0),
+         MTRANS_public = ifelse(MTRANS == "Public_Transportation", 1, 0),
+         MTRANS_walk = ifelse(MTRANS == "Walking", 1, 0),
+         MTRANS_auto = ifelse(MTRANS == "Automobile", 1, 0),
+         MTRANS_bike = ifelse(MTRANS == "Bike", 1, 0),
+         MTRANS_moto = ifelse(MTRANS == "Motorbike", 1, 0),
+         target = case_when(
+           grepl("Normal", NObeyesdad) ~ "Normal",
+           grepl("Overweight", NObeyesdad) ~ "Overweight/Obesity",
+           grepl("Obesity", NObeyesdad) ~ "Overweight/Obesity",
+           grepl("Insufficient", NObeyesdad) ~ "Insufficient"
+         ),
+         target = factor(target))
+
+# adding new_target: BMI defined by the calculated from height and weight
+obesity_new <- obesity_new %>%
+  mutate(new_bmi = Weight / Height^2,
+         new_target = case_when(
+           new_bmi < 18.5 ~ "Insufficient",
+           new_bmi >= 18.5 & new_bmi < 25 ~ "Normal",
+           new_bmi >= 25 ~ "Overweight/Obesity"
+         ))
+
+
+# customized table
+obesity_new %>%
+  head() %>%
+  mutate(ID = seq(1:nrow(head(obesity_new)))) %>%
+  select(ID, Gender, Age, family_history_with_overweight,
+         FCVC, CAEC_sometimes, CAEC_freq, CAEC_always, CAEC_no,
+         SMOKE, FAF, TUE, CALC_no, MTRANS_walk, MTRANS_bike, new_target) %>%
+  arrange(ID, new_target) %>%
+  rename(`Target` = new_target,
+         `Family History with Overweight` = family_history_with_overweight,
+         `Vegetables in your food?` = FCVC,
+         `Food between meals: Never` = CAEC_no,
+         `Food between meals: Sometimes` = CAEC_sometimes,
+         `Food between meals: Frequently` = CAEC_freq,
+         `Food between meals: Always` = CAEC_always,
+         `Smoker` = SMOKE,
+         `Physical activity (days)` = FAF,
+         `Time using technological devices` = TUE,
+         `No alcohol consumption` = CALC_no,
+         `Active commuting: Walking` = MTRANS_walk,
+         `Active commuting: Bike` = MTRANS_bike) %>%
+  arrange(ID, Target) %>%
+  knitr::kable() %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped",
+                                                  "hover"),
+                            full_width = TRUE,
+                            fixed_thead = list(enabled = TRUE,
+                                               background = "lightblue"))
+
+```
+
+
+### Machine learning model: BMI status classificator
+
+In this trial we should only focus on the final functionality of BMI status probabilities predictor since this is mainly for showing the awesome applications that can be developed in **R** with **Shiny**. Said that, modelling optimization or fine tuning are out of the scope of this trial. For that reason, we are gonna apply only one of the existing algorithms in the machine learning universe for classification tasks: the **C5.0 algorithm** (i.e., a decision tree algorithm). Next, we'll check how good was our model capturing the patterns in BMI status, and its corresponding contingency table. Finally, we'll use that model for making predictions, and plot them using **reactive programming** within an embedded **Shiny app**.  
+
+```{r, message=FALSE, echo=FALSE}
+# classification task
+obesity_train <- obesity_new %>%
+  select(Gender, Age, family_history_with_overweight,
+         FCVC, CAEC_sometimes, CAEC_freq, CAEC_always, CAEC_no,
+         SMOKE, FAF, TUE, CALC_no, MTRANS_walk, MTRANS_bike, new_target)
+
+# splitting training and test datasets
+index <- createDataPartition(obesity_train$new_target, p = .8, list = FALSE)
+train <- obesity_train[index, ]
+test <- obesity_train[-index, ]
+
+# model
+set.seed(42)
+m <- C5.0(train[, -15], factor(train$new_target), trials = 10, costs = NULL)
+
+# predictions
+p <- predict(m, test[, -15], type = "class")
+
+# how well did our model perform?
+agreement <- p == test$new_target
+```
+
+
+#### How good was our model?
+
+```{r, echo=FALSE, collapse=TRUE}
+# table creation
+ptable <- prop.table(table(agreement))
+
+# Change names of categories
+names(ptable) <- c("No agreement", "Agreement")
+
+# printing the results!
+glue("Agreement means that the BMI status was predicted correctly by the model")
+print(ptable)
+```
+
+It is not so bad: that means that the model correctly predicts the BMI status of a person with similar characteristics of the sample in the training data of approximately `r round(as.numeric(ptable[2]), 2) * 100`% of the times. At this point, it would be needed to fit other models using different algorithms, compare their performance parameters, and try to optimize the best one.
+A common practice here is to observe the contingency matrix to detect which predictions are being misinterpreted by our model. **Observed** data is presented as *rows*, and **predicted** data is presented as *columns*.
+
+```{r, echo=FALSE, collapse=TRUE}
+# table creation and customization
+dataf <- data.frame(p = p)
+cont_table <- table(test$new_target, dataf$p)
+
+# printing the results!
+glue("Multilabel contingency table")
+print(cont_table)
+```
+
+As we can see, it seems that our model becomes a bit messy when classify either *normal BMI* as *overweight/obese*, or reversal. That could be caused due to the narrow thresholds in the BMI requirements to state that a person has normal BMI status, or has overweight. 
+Neat! Let's create a simple ***Shiny app*** to visualise BMI status predictions given specific characteristics at individual-patient level as input.
+
+```{r, echo=FALSE}
+library(shiny)
+library(ggplot2)
+
+# Define the UI
+ui <- fluidPage(
+  titlePanel("Predicted Probabilities with Reactive Programming"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("gender", "Gender:", choices = list("Male" = 0, 
+                                                             "Female" = 1)),
+      numericInput("age", "Age:", value = 20, min = 20, max = 60, step = 1),
+      selectInput("family_history_with_overweight", "Overweight family history:", choices = list("No" = 0, "Yes" = 1)),
+      numericInput("FCVC", "Veggies in the food?:", value = 0, min = 0, max = 1, step = 1),
+       selectInput("CAEC_sometimes", "Sometimes meals between foods:", choices = list("No" = 0, "Yes" = 1)),
+       selectInput("CAEC_freq", "Frequent meals between foods:", choices = list("No" = 0, "Yes" = 1)),
+      selectInput("CAEC_always", "Always meals between foods:", choices = list("No" = 0, "Yes" = 1)),
+       selectInput("CAEC_no", "No meals between foods:", choices = list("Any meals" = 0, "No meals" = 1)),
+       selectInput("SMOKE", "Do you smoke?:", choices = list("No" = 0, "Yes" = 1)),
+       numericInput("FAF", "How many days do you do PA?:", value = 0, min = 0, max = 3, step = 1),
+       numericInput("TUE", "Time using tech devices:", value = 0, min = 0, max = 2, step = 1),
+       selectInput("CALC_no", "Alcohol consumption:", choices = list("Eventually" = 0, "No alcohol" = 1)),
+       selectInput("MTRANS_walk", "Do you commute walking?:", choices = list("No" = 0, "Yes" = 1)),
+       selectInput("MTRANS_bike", "Do you commute biking?:", choices = list("No" = 0, "Yes" = 1))
+    ),
+    mainPanel(
+      plotOutput("probBarPlot")
+    )
+  )
+)
+
+
+
+
+# Define the server logic
+server <- function(input, output) {
+  # Reactive dataframe based on user input
+  probabilities <- reactive({
+    predict(m, data.frame(Gender = input$gender,
+                            Age = input$age,
+                            family_history_with_overweight = input$family_history_with_overweight,
+                            FCVC = input$FCVC,
+                            CAEC_sometimes = input$CAEC_sometimes, 
+                            CAEC_freq = input$CAEC_freq,
+                            CAEC_always = input$CAEC_always,
+                            CAEC_no = input$CAEC_no,
+                            SMOKE = input$SMOKE,
+                            FAF = input$FAF,
+                            TUE = input$TUE,
+                            CALC_no = input$CALC_no,
+                            MTRANS_walk = input$MTRANS_walk,
+                            MTRANS_bike = input$MTRANS_bike), type = "prob") %>%
+  as.data.frame() %>%
+  pivot_longer(cols = everything(),
+               names_to = "class",
+               values_to = "probs") %>%
+  mutate(probs = round(probs, 3))
+  })
+  
+  # Render the bar plot
+  output$probBarPlot <- renderPlot({
+    ggplot(probabilities(), aes(x = class, y = probs, fill = class)) +
+      geom_bar(stat = "identity", width = 0.7) +
+      scale_y_continuous(limits = c(0, 1)) +
+      labs(title = "Probabilities for BMI Categories", x = "Class", y = "Probability") +
+      theme_minimal() +
+      theme(legend.position = "none") +
+      scale_fill_manual(values = c("Insufficient" = "skyblue", "Normal" = "lightgreen", "Overweight/Obesity" = "salmon"))
+  })
+}
+
+# Run the Shiny app
+shinyApp(ui = ui, server = server)
+
+```
+
