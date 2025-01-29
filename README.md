@@ -20,7 +20,7 @@ The flowwing variables do not exactly match with those appearing in the original
   + `Target`: BMI status, which is the target we want to predict.
 
 ## Model training and predictions using our Shiny app
-Focusing exclusively in the scope of this repository, we only trained one model using a C5.0 algorithm, which is a decision tree algorithm applied for classification tasks. After that, we observed the agreement between predicted and observed BMI status. Finally, we used our **Shiny** to make predictions and obtained visualizations of the predicted probabilities in real-time.
+Focusing exclusively in the scope of this repository, we only trained one model using a C5.0 algorithm, which is a decision tree algorithm applied for classification tasks. After that, we observed the agreement between predicted and observed BMI status. Finally, we used our **Shiny** app to make predictions and obtained visualizations of the predicted probabilities in real-time.
 
 |     |Insufficient|Normal |Overweight/Obesity|
 |------------:|----|---------|---------|
